@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: boathouse
+  labels:
+    app.kubernetes.io/name: boathouse
+    app.kubernetes.io/instance: boathouse
+spec:
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: boathouse
+      app.kubernetes.io/instance: boathouse
+  template:
+    metadata:
+      name: boathouse
+      labels:
+        app.kubernetes.io/name: boathouse
+        app.kubernetes.io/instance: boathouse
+      annotations:
+        checksum/boathouse-scripts: {{ include (print .Template.BasePath "/configmap/boathouse-scripts.yaml") . | sha256sum }}
+        checksum/boathouse-vault-agent-config: {{ include (print .Template.BasePath "/configmap/boathouse-vault-agent-config.yaml") . | sha256sum }}
+        sidecar.istio.io/inject: 'false'
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-configmap: "boathouse-vault-agent-config"
+        vault.hashicorp.com/agent-pre-populate: "false"
+    spec:
+      initContainers:
+        - name: install-host-deps
+          image: busybox:latest
+          imagePullPolicy: Always
+          securityContext:
+              privileged: false
+          volumeMounts:
+            - mountPath: /rootfs
+              name: rootfs
+            - mountPath: /scripts
+              name: boathouse-scripts
+          command:
+            - sh
+            - -c
+            - cp /scripts/install_deps.sh /rootfs/tmp/ && chroot /rootfs sh /tmp/install_deps.sh
+        - name: boathouse-deploy
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          command:
+            - sh
+            - -c
+            - mkdir -p '/flexmnt/statcan.gc.ca~boathouse/' && cp /usr/local/bin/boathouse '/flexmnt/statcan.gc.ca~boathouse/boathouse'
+          imagePullPolicy: Always
+          securityContext:
+              privileged: false
+          volumeMounts:
+            - mountPath: /flexmnt
+              name: flexvolume-plugindir
+            - mountPath: /hostbin
+              name: flexvolume-usrlocalbin
+      containers:
+        - name: agent
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          args: ["agent"]
+          env:
+            - name: VAULT_AGENT_ADDR
+              value: http://127.0.0.1:8100
+          securityContext:
+            privileged: false
+          volumeMounts:
+            - name: rootfs
+              subPath: tmp
+              mountPath: /tmp
+      volumes:
+        - name: flexvolume-plugindir
+          hostPath:
+            path: {{ .Values.flexVolume.pluginDir | quote }}
+        - name: flexvolume-usrlocalbin
+          hostPath:
+            path: '/usr/local/bin'
+        - name: rootfs
+          hostPath:
+            path: /
+            type: Directory
+        - name: boathouse-scripts
+          configMap:
+            name: boathouse-scripts
+      tolerations:
+        - key: node.statcan.gc.ca/purpose
+          operator: Equal
+          value: user
+        - key: data.statcan.gc.ca/classification
+          operator: Exists
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml .Values.imagePullSecrets | indent 8 }}
+      {{- end }}
+      serviceAccountName: boathouse
+      priorityClassName: boathouse
