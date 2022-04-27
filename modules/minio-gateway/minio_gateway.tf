@@ -95,7 +95,7 @@ resource "kubernetes_ingress" "minio" {
       "kubernetes.io/ingress.class" = "istio"
     }
   }
- 
+
   spec {
     rule {
       host = "${var.namespace}-boathouse.${var.domain}"
@@ -178,8 +178,6 @@ spec:
     repoURL: ${var.argocd_repo_url}
     targetRevision: ${var.argocd_target_revision}
     path: ${var.argocd_folder}
-    kustomize:
-      version: v4.4.0
   syncPolicy:
     automated:
       prune: true

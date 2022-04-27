@@ -38,23 +38,18 @@ module "namespace_argocd_operator_system" {
   dependencies = []
 }
 
-##
-## Deploy ArgoCD Operator and Projects
-##
-module "argocd_operator" {
-  source = "git::https://github.com/canada-ca-terraform-modules/terraform-kubernetes-argocd-operator.git?ref=v1.0.1"
-
-  chart_version   = "0.0.5"
-  helm_repository = "https://statcan.github.io/charts"
-  helm_namespace  = kubernetes_namespace.argocd_operator_system.id
-
+locals {
   argocd_projects = [
     {
       name           = "daaas-system"
       namespace      = "daaas-system"
-      classification = "unclassified"
+      classification = "protected-b"
       spec = {
-        kustomizeBuildOptions = "--load_restrictor LoadRestrictionsNone",
+        image = {
+          repository = "argoproj/argocd"
+          tag        = "sha256:0bbcd97134f2d7c28293d4b717317f32aaf8fa816a1ffe764c1ebc390c4646d3"
+        },
+        kustomizeBuildOptions = "--load-restrictor LoadRestrictionsNone --enable-helm",
         oidcConfig = {
           name         = "daaas-system"
           issuer       = "https://login.microsoftonline.com/XXXX/v2.0"
@@ -92,24 +87,68 @@ module "argocd_operator" {
   ]
 }
 
-resource "kubectl_manifest" "platform_project" {
-  yaml_body = <<YAML
-apiVersion: argoproj.io/v1alpha1
-kind: AppProject
-metadata:
-  name: platform
-  namespace: daaas-system
-spec:
-  clusterResourceWhitelist:
-  - group: '*'
-    kind: '*'
-  destinations:
-  - namespace: '*'
-    server: '*'
-  sourceRepos:
-  - '*'
-YAML
+resource "helm_release" "argocd_operator" {
+  name = "argocd-operator"
+
+  repository = "https://statcan.github.io/charts"
+  chart      = "argocd-operator"
+  version    = "0.1.2"
+  namespace  = kubernetes_namespace.argocd_operator_system.id
+  timeout    = 1200
+
+  values = [<<EOF
+operator:
+  clusterDomain: ""
+  nsToWatch: "argocd-operator-system,daaas-system"
+  nsClusterConfig: "daaas-system"
+  image:
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  replicaCount: 1
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    runAsNonRoot: true
+    fsGroup: 1000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+      ephemeral-storage: 500Mi
+
+projects:
+%{for project in local.argocd_projects~}
+  - name: ${project.name}
+    namespace: ${project.namespace}
+    podLabels:
+      data.statcan.gc.ca/classification: ${project.classification}
+    spec:
+      image: ${project.spec.image.repository}
+      version: ${project.spec.image.tag}
+      kustomizeBuildOptions: ${project.spec.kustomizeBuildOptions}
+      oidcConfig: |
+        name: ${project.spec.oidcConfig.name}
+        issuer: ${project.spec.oidcConfig.issuer}
+        clientID: ${project.spec.oidcConfig.clientID}
+        clientSecret: ${project.spec.oidcConfig.clientSecret}
+        requestedIDTokenClaims:
+          groups:
+            essential: ${project.spec.oidcConfig.requestedIDTokenClaims.groups.essential}
+        requestedScopes: ${jsonencode(project.spec.oidcConfig.requestedScopes)}
+      rbac:
+        defaultPolicy: ${project.spec.rbac.defaultPolicy}
+        policy: ${jsonencode(project.spec.rbac.policy)}
+        scopes: ${jsonencode(project.spec.rbac.scopes)}
+      server:
+        autoscale:
+          enabled: ${project.spec.server.autoscale.enabled}
+        host: ${project.spec.server.host}
+        insecure: ${project.spec.server.insecure}
+%{endfor~}
+EOF
+  ]
 }
+
 
 resource "kubectl_manifest" "daaas_system" {
   yaml_body = <<YAML
@@ -126,7 +165,7 @@ spec:
   source:
     repoURL: 'https://github.com/StatCan/aaw-argocd-manifests'
     path: daaas-system
-    targetRevision: "aaw-prod-cc-00"
+    targetRevision: aaw-prod-cc-00
     directory:
       recurse: true
       jsonnet:
@@ -160,7 +199,7 @@ spec:
   source:
     repoURL: 'https://github.com/StatCan/aaw-argocd-manifests'
     path: statcan-system
-    targetRevision: "aaw-prod-cc-00"
+    targetRevision: aaw-prod-cc-00
     directory:
       recurse: true
       jsonnet:

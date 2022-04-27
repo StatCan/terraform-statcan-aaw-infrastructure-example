@@ -247,6 +247,11 @@ artifactory-ha:
     user: artifactoryha@${module.jfrog_postgresql.name}
     password: '${random_password.jfrog_artifactory_postgresql.result}'
 
+  systemYamlOverride:
+    shared:
+      extraJavaOpts: >
+        -Dartifactory.list.of.repos.hosts.need.to.avoid.url.normalisation=k8scc01covidacr.azurecr.io
+
   artifactory:
     startupProbe:
       enabled: false

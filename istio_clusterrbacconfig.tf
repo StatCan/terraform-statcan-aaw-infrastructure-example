@@ -29,6 +29,7 @@ spec:
     - kube-system
     - kubecost-system
     - kubeflow
+    - monitoring-system
     - oauth2-proxy-system
     - prometheus-system
     - statcan-system
